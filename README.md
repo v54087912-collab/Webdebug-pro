@@ -25,6 +25,29 @@ A lightweight Manifest V3 Chrome/Edge extension that acts as a mini DevTools pan
 - **Smart Log Management:** Per-tab memory buffer (capped at 1000), grouped duplicates, pinned entries, and persistence across navigations.
 - **Cross-context Support:** Works as a toolbar **popup** and as a native **DevTools panel**.
 
+## Architecture & How It Works
+
+WebDebug Pro uses a multi-layered Manifest V3 architecture to safely and effectively capture logs from the host page without compromising security or performance.
+
+1. **Injected Script (`injected.js`)**
+   - **Environment**: Runs in the **Main World** (the same execution environment as the host page).
+   - **Role**: Overrides native `console` methods (`log`, `warn`, `error`, etc.), hooks into `window.onerror` and `unhandledrejection`, and intercepts `fetch` and `XMLHttpRequest` calls.
+   - **Data Flow**: Serializes the captured data (handling circular references and DOM elements) and dispatches a custom `window.postMessage()` to the content script.
+
+2. **Content Script (`content-script.js`)**
+   - **Environment**: Runs in the **Isolated World**.
+   - **Role**: Acts as a secure bridge. It listens for the `message` events dispatched by `injected.js`.
+   - **Data Flow**: Forwards the sanitized data securely to the background service worker using `chrome.runtime.sendMessage`.
+
+3. **Background Service Worker (`background.js`)**
+   - **Environment**: Runs in the background (MV3 Service Worker).
+   - **Role**: Maintains a per-tab, in-memory buffer of logs (capped at 1000 entries to prevent memory leaks). It also directly intercepts failed network requests via `chrome.webRequest` (catching CORS and 4xx/5xx errors).
+   - **Data Flow**: Connects to the UI via `chrome.runtime.connect` and streams logs in real-time.
+
+4. **UI Panel (`panel.html` / `panel.js` / `panel.css`)**
+   - **Environment**: Runs as an Extension Popup or natively within the Chrome DevTools panel.
+   - **Role**: Renders the interactive JSON trees, manages storage, executes JavaScript commands via `chrome.scripting`, and handles Bug Report generation.
+
 ## Load unpacked
 
 1. Download and unzip the extension.

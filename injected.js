@@ -207,8 +207,16 @@
       
       xhr.addEventListener("loadend", () => {
         const info = xhr.__wd || {};
-        let resData = xhr.responseText;
-        try { resData = JSON.parse(xhr.responseText); } catch(e){}
+        let resData;
+        try {
+          if (!xhr.responseType || xhr.responseType === "text") {
+            resData = xhr.responseText;
+            try { resData = JSON.parse(resData); } catch(e){}
+          } else {
+            resData = xhr.response;
+          }
+        } catch(e) { resData = "<binary or inaccessible response>"; }
+        
         let resHeaders = {};
         try {
           xhr.getAllResponseHeaders().trim().split(/[\r\n]+/).forEach(line => {

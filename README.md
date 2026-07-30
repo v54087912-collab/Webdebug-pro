@@ -54,3 +54,7 @@ A lightweight Manifest V3 Chrome/Edge extension that acts as a mini DevTools pan
 - **Contact Developer (Telegram)**: [@R3V_X](https://t.me/R3V_X)
 - **Community Link (Telegram)**: [Join Group](https://t.me/allinformation0173)
 - **Instagram**: [opeditzxx](https://www.instagram.com/opeditzxx/?utm_source=qr&r=nametag)
+
+## Open Source
+- Want to contribute? Check out the [CONTRIBUTING.md](CONTRIBUTING.md) guide.
+- This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

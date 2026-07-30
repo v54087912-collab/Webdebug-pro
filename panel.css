@@ -1,0 +1,162 @@
+:root {
+  --bg: #ffffff;
+  --fg: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --card: #f8fafc;
+  --hover: #eef2f7;
+  --accent: #2563eb;
+  --log: #64748b;
+  --info: #2563eb;
+  --warn: #ca8a04;
+  --error: #dc2626;
+  --network: #7c3aed;
+  --pin: #f59e0b;
+}
+.theme-dark {
+  --bg: #0b1220;
+  --fg: #e2e8f0;
+  --muted: #94a3b8;
+  --border: #1e293b;
+  --card: #111a2e;
+  --hover: #172033;
+  --accent: #60a5fa;
+  --log: #94a3b8;
+  --info: #60a5fa;
+  --warn: #eab308;
+  --error: #f87171;
+  --network: #a78bfa;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  width: 720px; min-height: 480px; height: 100vh;
+  display: flex; flex-direction: column;
+  font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg); color: var(--fg);
+}
+.toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--bg); z-index: 5;
+}
+.title { font-weight: 600; display: flex; align-items: center; gap: 6px; margin-right: 8px; }
+.title .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1; }
+#search {
+  flex: 1; min-width: 140px;
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--card); color: var(--fg); font-size: 12px;
+}
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--card); cursor: pointer; user-select: none; font-size: 11px;
+}
+.chip input { margin: 0; }
+button {
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--card); color: var(--fg); cursor: pointer; font-size: 12px;
+}
+button:hover { background: var(--hover); }
+button.danger { color: var(--error); }
+.export { position: relative; }
+.export .menu {
+  display: none; position: absolute; right: 0; top: 100%; margin-top: 4px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  overflow: hidden; z-index: 10;
+}
+.export.open .menu { display: block; }
+.export .menu button {
+  display: block; width: 100%; border: 0; border-radius: 0;
+  padding: 6px 12px; text-align: left; background: var(--bg);
+}
+.export .menu button:hover { background: var(--hover); }
+.status {
+  display: flex; justify-content: space-between;
+  padding: 4px 10px; font-size: 11px; color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.list { padding: 0; flex: 1; overflow: auto; }
+.entry {
+  display: grid; grid-template-columns: 68px 60px 1fr auto;
+  gap: 8px; padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  align-items: start; cursor: pointer;
+}
+.entry:hover { background: var(--hover); }
+.entry .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.entry .sev {
+  font-weight: 600; text-transform: uppercase; font-size: 10px;
+  padding: 2px 6px; border-radius: 4px; text-align: center;
+  color: #fff; align-self: start;
+}
+.entry.sev-log .sev { background: var(--log); }
+.entry.sev-info .sev { background: var(--info); }
+.entry.sev-warn .sev { background: var(--warn); }
+.entry.sev-error .sev { background: var(--error); }
+.entry.sev-network .sev { background: var(--network); }
+.entry .msg {
+  white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.entry .src { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.entry .actions { display: flex; gap: 4px; opacity: 0; }
+.entry:hover .actions { opacity: 1; }
+.entry .actions button {
+  padding: 2px 6px; font-size: 11px;
+}
+.entry .badge {
+  display: inline-block; min-width: 18px; padding: 0 5px;
+  background: var(--accent); color: #fff; border-radius: 9px;
+  font-size: 10px; text-align: center; margin-left: 6px;
+}
+.entry.pinned { background: color-mix(in oklab, var(--pin) 12%, transparent); }
+.entry .pin { color: var(--pin); }
+.empty {
+  padding: 40px 20px; text-align: center; color: var(--muted);
+}
+.expanded {
+  margin-top: 4px; padding: 6px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 4px;
+  white-space: pre-wrap; font-family: ui-monospace, monospace;
+  font-size: 11px; max-height: 300px; overflow: auto;
+}
+/* JSON Tree */
+.json-tree { font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5; }
+.json-node { margin-left: 12px; }
+.json-key { color: var(--accent); }
+.json-val.string { color: var(--network); }
+.json-val.number { color: var(--info); }
+.json-val.boolean { color: var(--warn); }
+.json-val.null { color: var(--muted); }
+.json-toggle { cursor: pointer; user-select: none; font-weight: bold; }
+.json-toggle:hover { color: var(--accent); }
+.json-collapsed > .json-children { display: none; }
+.json-collapsed > .json-toggle::after { content: " {...}"; color: var(--muted); font-weight: normal; }
+
+/* Console Input */
+.console-input {
+  display: flex; align-items: center;
+  border-top: 1px solid var(--border);
+  background: var(--card); padding: 6px 10px;
+}
+.console-input .prompt {
+  color: var(--accent); font-weight: bold; font-family: ui-monospace, monospace;
+  margin-right: 8px; font-size: 13px;
+}
+#jsInput {
+  flex: 1; border: none; background: transparent; color: var(--fg);
+  font-family: ui-monospace, monospace; font-size: 12px; outline: none;
+}
+
+/* Tabs & Storage Manager */
+.tabs { display: flex; gap: 4px; }
+.tab-btn { background: transparent; border: none; padding: 2px 8px; cursor: pointer; color: var(--muted); border-radius: 4px; font-weight: bold; }
+.tab-btn:hover { background: var(--hover); color: var(--fg); }
+.tab-btn.active { background: var(--card); color: var(--accent); }
+.view-storage { padding: 12px; display: flex; flex-direction: column; gap: 16px; }
+.storage-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.storage-head h3 { margin: 0; font-size: 13px; color: var(--fg); }
+.storage-out { min-height: 40px; max-height: none; overflow: auto; }

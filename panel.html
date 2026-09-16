@@ -5,83 +5,115 @@
     <title>WebDebug Pro</title>
     <link rel="stylesheet" href="panel.css" />
   </head>
-  <body class="theme-light">
-    <header class="toolbar">
-      <div class="title">
-        <img src="icons/icon48.png" width="18" height="18" alt="Logo" style="border-radius:4px;" />
-        WebDebug Pro
+  <body class="theme-dark">
+    <!-- Top Header -->
+    <header class="wd-header" id="panelHeader">
+      <div class="wd-header-left">
+        <img class="wd-logo" src="icons/icon48.png" alt="Logo" />
+        <span class="wd-title">WebDebug Pro</span>
+        <span class="wd-pill-tab" id="tabinfo">tab #...</span>
+        <span class="wd-live-pill"><span class="wd-live-dot"></span> LIVE</span>
       </div>
-      <div class="controls">
-        <input id="search" type="search" placeholder="Filter logs…" />
-        <label class="chip" data-sev="log"><input type="checkbox" data-filter="log" checked /> log</label>
-        <label class="chip" data-sev="info"><input type="checkbox" data-filter="info" checked /> info</label>
-        <label class="chip" data-sev="warn"><input type="checkbox" data-filter="warn" checked /> warn</label>
-        <label class="chip" data-sev="error"><input type="checkbox" data-filter="error" checked /> error</label>
-        <label class="chip" data-sev="network"><input type="checkbox" data-filter="network" checked /> net</label>
-        <label class="chip" title="Group duplicate entries"><input type="checkbox" id="group" /> group</label>
-        <label class="chip" title="Persist across reloads"><input type="checkbox" id="persist" /> persist</label>
-        <label class="chip" title="Pause live updates"><input type="checkbox" id="pause" /> pause</label>
-        <label class="chip" id="blacklistChip" style="display:none; color:var(--error); border-color:var(--error); cursor:pointer;" title="Click to clear blacklist">
-          Unblock (<span id="blacklistCount">0</span>)
-        </label>
-        <button id="btnInspect" title="Inspect DOM Element on Page">🔍 Inspect</button>
-        <button id="copyAll" title="Copy visible logs">Copy all</button>
-        <div class="export">
-          <button id="exportBtn">Export ▾</button>
-          <div class="menu" id="exportMenu">
+      <div class="wd-header-right">
+        <div class="wd-perf">
+          <span class="wd-perf-pill accent" id="perfWidget">Mem: --</span>
+          <span class="wd-perf-pill" id="loadWidget">Load: --</span>
+        </div>
+        <button class="wd-win-btn" id="theme" title="Toggle Light/Dark Theme">🌓</button>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="wd-toolbar">
+      <div class="wd-search-wrap">
+        <span class="wd-search-icon">🔍</span>
+        <input id="search" class="wd-search" type="search" placeholder="Filter logs (text or /regex/)..." spellcheck="false" />
+        <button class="wd-search-clear" id="searchClear">✕</button>
+      </div>
+      <div class="wd-filters-wrap">
+        <button class="wd-chip active" data-filter="all">ALL <span class="wd-chip-count" id="countAll">0</span></button>
+        <button class="wd-chip active chip-log" data-filter="log">LOG <span class="wd-chip-count" id="countLog">0</span></button>
+        <button class="wd-chip active chip-info" data-filter="info">INFO <span class="wd-chip-count" id="countInfo">0</span></button>
+        <button class="wd-chip active chip-warn" data-filter="warn">WARN <span class="wd-chip-count" id="countWarn">0</span></button>
+        <button class="wd-chip active chip-error" data-filter="error">ERR <span class="wd-chip-count" id="countError">0</span></button>
+        <button class="wd-chip active chip-net" data-filter="network">NET <span class="wd-chip-count" id="countNet">0</span></button>
+      </div>
+      <div class="wd-actions-wrap">
+        <button class="wd-btn" id="group" title="Group duplicate entries">Group</button>
+        <button class="wd-btn" id="persist" title="Persist across page navigations">Persist</button>
+        <button class="wd-btn" id="pause" title="Pause live updates">Pause</button>
+        <button class="wd-btn danger" id="blacklistChip" style="display:none;" title="Click to clear blocked sources">Unblock (<span id="blacklistCount">0</span>)</button>
+        <button class="wd-btn" id="btnInspect" title="Inspect DOM Element on Page">🔍 Inspect</button>
+        <button class="wd-btn" id="copyAll" title="Copy all visible logs">📋 Copy</button>
+        <div class="wd-export">
+          <button class="wd-btn" id="exportBtn">Export ▾</button>
+          <div class="wd-export-menu" id="exportMenu">
             <button data-fmt="json">JSON</button>
             <button data-fmt="txt">TXT</button>
             <button data-fmt="csv">CSV</button>
             <button data-fmt="bugreport">HTML Bug Report</button>
           </div>
         </div>
-        <button id="clear" class="danger">Clear</button>
-        <button id="theme" title="Toggle theme">🌓</button>
-      </div>
-    </header>
-    <div class="status">
-      <div class="tabs">
-        <button id="tabLogs" class="tab-btn active">Logs</button>
-        <button id="tabStorage" class="tab-btn">Storage</button>
-      </div>
-      <div>
-        <span id="perfWidget" style="margin-right: 8px; color: var(--accent); font-weight: bold;"></span>
-        <span id="count">0 entries</span>
-        <span id="tabinfo" style="margin-left: 8px;"></span>
-      </div>
-    </div>
-    
-    <div id="viewLogs" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
-      <main id="list" class="list"></main>
-      <div class="console-input">
-        <span class="prompt">&gt;</span>
-        <input type="text" id="jsInput" placeholder="Evaluate JavaScript (Press Enter)" autocomplete="off" spellcheck="false" />
+        <button class="wd-btn danger" id="clear" title="Clear non-pinned logs">🗑 Clear</button>
       </div>
     </div>
 
-    <main id="viewStorage" class="list view-storage" style="display:none;">
-      <div class="storage-section">
-        <div class="storage-head">
+    <!-- Statusbar -->
+    <div class="wd-statusbar">
+      <div class="wd-tabs">
+        <button id="tabLogs" class="wd-tab-btn active">Logs</button>
+        <button id="tabStorage" class="wd-tab-btn">Storage Manager</button>
+      </div>
+      <div>
+        <span id="count">0 entries</span>
+      </div>
+    </div>
+
+    <!-- Logs View -->
+    <div id="viewLogs" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+      <main id="list" class="wd-list"></main>
+      <div class="wd-console-input">
+        <span class="wd-console-prompt">&gt;</span>
+        <input type="text" id="jsInput" placeholder="Evaluate JavaScript in page context (Press Enter)..." autocomplete="off" spellcheck="false" />
+      </div>
+    </div>
+
+    <!-- Storage View -->
+    <main id="viewStorage" class="wd-view-storage" style="display:none;">
+      <div class="wd-storage-card">
+        <div class="wd-storage-header">
           <h3>Local Storage</h3>
-          <div><button id="btnRefreshLocal">Refresh</button> <button id="btnClearLocal" class="danger">Clear</button></div>
+          <div class="wd-storage-actions">
+            <button class="wd-btn" id="btnRefreshLocal">Refresh</button>
+            <button class="wd-btn danger" id="btnClearLocal">Clear</button>
+          </div>
         </div>
-        <div id="outLocal" class="expanded storage-out"></div>
+        <div id="outLocal" class="wd-storage-body"></div>
       </div>
-      <div class="storage-section">
-        <div class="storage-head">
+
+      <div class="wd-storage-card">
+        <div class="wd-storage-header">
           <h3>Session Storage</h3>
-          <div><button id="btnRefreshSession">Refresh</button> <button id="btnClearSession" class="danger">Clear</button></div>
+          <div class="wd-storage-actions">
+            <button class="wd-btn" id="btnRefreshSession">Refresh</button>
+            <button class="wd-btn danger" id="btnClearSession">Clear</button>
+          </div>
         </div>
-        <div id="outSession" class="expanded storage-out"></div>
+        <div id="outSession" class="wd-storage-body"></div>
       </div>
-      <div class="storage-section">
-        <div class="storage-head">
+
+      <div class="wd-storage-card">
+        <div class="wd-storage-header">
           <h3>Cookies</h3>
-          <div><button id="btnRefreshCookies">Refresh</button> <button id="btnClearCookies" class="danger">Clear</button></div>
+          <div class="wd-storage-actions">
+            <button class="wd-btn" id="btnRefreshCookies">Refresh</button>
+            <button class="wd-btn danger" id="btnClearCookies">Clear</button>
+          </div>
         </div>
-        <div id="outCookies" class="expanded storage-out"></div>
+        <div id="outCookies" class="wd-storage-body"></div>
       </div>
     </main>
+
     <script src="panel.js"></script>
   </body>
 </html>

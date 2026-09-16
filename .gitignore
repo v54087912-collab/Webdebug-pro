@@ -19,3 +19,7 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Scratch & error logs
+error/
+*.log

@@ -1,4 +1,4 @@
-// WebDebug Pro - Panel UI
+// WebDebug Pro - Panel UI (for DevTools and Detached Windows)
 const state = {
   tabId: null,
   entries: [],
@@ -7,9 +7,12 @@ const state = {
   group: false,
   persist: false,
   expanded: new Set(),
-  theme: "light",
+  theme: "dark",
   blacklist: new Set(),
   pause: false,
+  history: [],
+  historyIndex: -1,
+  activeTab: "logs",
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -18,14 +21,22 @@ const countEl = $("#count");
 const tabInfoEl = $("#tabinfo");
 
 function getTabId() {
+  // Query param (if opened via wd:openWindow)
+  const params = new URLSearchParams(window.location.search);
+  const paramTabId = parseInt(params.get("tabId"), 10);
+  if (!isNaN(paramTabId) && paramTabId > 0) {
+    return Promise.resolve(paramTabId);
+  }
+
   // DevTools panel
   if (window.chrome?.devtools?.inspectedWindow?.tabId) {
     return Promise.resolve(chrome.devtools.inspectedWindow.tabId);
   }
-  // Popup: use active tab
+
+  // Active tab query
   return new Promise((resolve) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      resolve(tabs[0] ? tabs[0].id : null);
+      resolve(tabs && tabs[0] ? tabs[0].id : null);
     });
   });
 }
@@ -33,6 +44,10 @@ function getTabId() {
 function fmtTime(ts) {
   const d = new Date(ts);
   return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function argToText(a) {
@@ -47,25 +62,37 @@ function argToText(a) {
 
 function renderJsonTree(obj, isRoot = true) {
   if (obj === null) return `<span class="json-val null">null</span>`;
+  if (obj === undefined || obj === "undefined") return `<span class="json-val null" style="color:#94a3b8;">undefined</span>`;
+  if (obj === "[Circular]") return `<span class="json-val" style="color:#f59e0b; font-style:italic;">[Circular]</span>`;
   if (typeof obj === "string") return `<span class="json-val string">"${escapeHtml(obj)}"</span>`;
   if (typeof obj === "number") return `<span class="json-val number">${obj}</span>`;
   if (typeof obj === "boolean") return `<span class="json-val boolean">${obj}</span>`;
-  
+
   if (typeof obj === "object") {
     if (obj.__type === "Error") {
-       return `<span class="json-val error">${escapeHtml(obj.name)}: ${escapeHtml(obj.message)}</span>`;
+      return `<span class="json-val error" style="color:#ef4444; font-weight:600;">${escapeHtml(obj.name)}: ${escapeHtml(obj.message)}</span>`;
     }
+    if (obj.__type === "Element") {
+      return `<span style="color:#38bdf8; font-family:monospace; font-weight:600;">${escapeHtml(obj.preview || `<${obj.tagName}>`)}</span>`;
+    }
+    if (obj.__type === "Map") {
+      return `<span style="color:#a78bfa; font-weight:600;">Map(${obj.size})</span> ` + renderJsonTree(obj.entries, false);
+    }
+    if (obj.__type === "Set") {
+      return `<span style="color:#a78bfa; font-weight:600;">Set(${obj.size})</span> ` + renderJsonTree(obj.values, false);
+    }
+
     const isArray = Array.isArray(obj);
     const keys = Object.keys(obj);
     if (keys.length === 0) return isArray ? "[]" : "{}";
-    
+
     const open = isArray ? "[" : "{";
     const close = isArray ? "]" : "}";
-    
-    let html = `<span class="json-item ${isRoot ? '' : 'json-collapsed'}"><span class="json-toggle">${open}</span><div class="json-children">`;
+
+    let html = `<span class="json-item ${isRoot ? "" : "json-collapsed"}"><span class="json-toggle">${open}</span><div class="json-children">`;
     for (const key of keys) {
       html += `<div class="json-node">
-        ${isArray ? '' : `<span class="json-key">${escapeHtml(key)}:</span> `}
+        ${isArray ? "" : `<span class="json-key">${escapeHtml(key)}:</span> `}
         ${renderJsonTree(obj[key], false)}
       </div>`;
     }
@@ -102,10 +129,10 @@ function computeVisible() {
   const q = state.search.trim();
   let regex = null;
   if (q.startsWith("/") && q.lastIndexOf("/") > 0) {
-     try {
-        const lastSlash = q.lastIndexOf("/");
-        regex = new RegExp(q.substring(1, lastSlash), q.substring(lastSlash + 1));
-     } catch(e) {}
+    try {
+      const lastSlash = q.lastIndexOf("/");
+      regex = new RegExp(q.substring(1, lastSlash), q.substring(lastSlash + 1));
+    } catch (_) {}
   }
   const qLower = q.toLowerCase();
 
@@ -114,7 +141,7 @@ function computeVisible() {
     if (e.source && state.blacklist.has(e.source)) return false;
     if (!q) return true;
     if (regex) {
-       return regex.test(e.message) || (e.source && regex.test(e.source)) || regex.test(e.severity);
+      return regex.test(e.message) || (e.source && regex.test(e.source)) || regex.test(e.severity);
     }
     return (
       e.message.toLowerCase().includes(qLower) ||
@@ -122,6 +149,7 @@ function computeVisible() {
       e.severity.includes(qLower)
     );
   });
+
   if (state.group) {
     const map = new Map();
     for (const e of list) {
@@ -136,18 +164,51 @@ function computeVisible() {
     }
     list = Array.from(map.values());
   }
-  // newest at top
+
   list.sort((a, b) => b.timestamp - a.timestamp);
   return list;
 }
 
+let renderRaf = null;
+function updateBadgeCounters() {
+  const counts = { all: state.entries.length, log: 0, info: 0, warn: 0, error: 0, network: 0 };
+  for (const e of state.entries) {
+    if (counts[e.severity] !== undefined) counts[e.severity]++;
+  }
+  const cAll = $("#countAll"); if (cAll) cAll.textContent = counts.all;
+  const cLog = $("#countLog"); if (cLog) cLog.textContent = counts.log;
+  const cInfo = $("#countInfo"); if (cInfo) cInfo.textContent = counts.info;
+  const cWarn = $("#countWarn"); if (cWarn) cWarn.textContent = counts.warn;
+  const cErr = $("#countError"); if (cErr) cErr.textContent = counts.error;
+  const cNet = $("#countNet"); if (cNet) cNet.textContent = counts.network;
+}
+
+function scheduleRender() {
+  updateBadgeCounters();
+  if (renderRaf) return;
+  renderRaf = requestAnimationFrame(() => {
+    renderRaf = null;
+    render();
+  });
+}
+
 function render() {
+  updateBadgeCounters();
+
   const visible = computeVisible();
   countEl.textContent = `${visible.length} / ${state.entries.length} entries`;
+
   if (visible.length === 0) {
-    listEl.innerHTML = `<div class="empty">No logs yet. Interact with the page — console output, errors and failed network requests will stream in here.</div>`;
+    listEl.innerHTML = `
+      <div class="wd-empty">
+        <div class="wd-empty-icon">📜</div>
+        <div>No logs captured yet.</div>
+        <div style="font-size:11px; opacity:0.8;">Interact with the page — console output, errors, and network calls will stream live here.</div>
+      </div>
+    `;
     return;
   }
+
   const html = visible.map((e) => {
     const st = stackText(e);
     const showArgs = e.args && e.args.length > 0 && e.args.map(argToText).join(" ").trim() !== e.message.trim();
@@ -158,27 +219,39 @@ function render() {
     if (st) {
       detailHtml += (detailHtml ? "<br><br>" : "") + escapeHtml(st);
     }
-    const showExpand = !!detailHtml;
-    const isExpanded = state.expanded.has(e.id);
-    return `
-      <div class="entry sev-${e.severity} ${e.pinned ? "pinned" : ""}" data-id="${e.id}">
-        <div class="time">${fmtTime(e.timestamp)}</div>
-        <div class="sev">${e.severity}</div>
-        <div>
-          <div class="msg">${escapeHtml(e.message)}${e._count > 1 ? `<span class="badge">×${e._count}</span>` : ""}</div>
-          ${e.source ? `<span class="src">${escapeHtml(e.source)}</span>` : ""}
-          ${isExpanded && showExpand ? `<div class="expanded">${detailHtml}</div>` : ""}
+    if (!detailHtml) {
+      detailHtml = `
+        <div style="font-family:var(--wd-mono, monospace); font-size:11px; opacity:0.85; line-height:1.6;">
+          <div><strong>Timestamp:</strong> ${new Date(e.timestamp).toISOString()} (${fmtTime(e.timestamp)})</div>
+          <div><strong>Severity:</strong> ${escapeHtml(e.severity.toUpperCase())}</div>
+          ${e.source ? `<div><strong>Source:</strong> ${escapeHtml(e.source)}</div>` : ""}
+          <div style="margin-top:4px;"><strong>Full Message:</strong> ${escapeHtml(e.message)}</div>
         </div>
-        <div class="actions">
-          ${showExpand ? `<button data-act="expand" title="Show stack trace">${isExpanded ? "−" : "+"}</button>` : ""}
-          <button data-act="copy">Copy</button>
-          ${st ? `<button data-act="copyStack" title="Copy only the stack trace">Copy Stack</button>` : ""}
-          <button data-act="pin" class="${e.pinned ? "pin" : ""}">${e.pinned ? "★" : "☆"}</button>
-          ${e.source ? `<button data-act="block" title="Hide logs from this source">🚫</button>` : ""}
+      `;
+    }
+    const isExpanded = state.expanded.has(String(e.id));
+
+    return `
+      <div class="wd-entry sev-${e.severity} ${e.pinned ? "pinned" : ""}" data-id="${escapeHtml(String(e.id))}">
+        <div class="wd-time">${fmtTime(e.timestamp)}</div>
+        <div class="wd-sev">${e.severity === "network" ? "net" : e.severity}</div>
+        <div class="wd-content">
+          <div class="wd-msg">${escapeHtml(e.message)}${e._count > 1 ? `<span class="wd-count-badge">×${e._count}</span>` : ""}</div>
+          ${e.source ? `<span class="wd-src" title="${escapeHtml(e.source)}">${escapeHtml(e.source)}</span>` : ""}
+          ${isExpanded ? `<div class="wd-expanded-box">${detailHtml}</div>` : ""}
+        </div>
+        <div class="wd-row-actions">
+          <button class="wd-act-btn ${isExpanded ? "act-active" : ""}" data-act="expand" title="${isExpanded ? "Collapse details" : "Expand details"}">${isExpanded ? "−" : "+"}</button>
+          <button class="wd-act-btn" data-act="copy" title="Copy log">📋</button>
+          ${st ? `<button class="wd-act-btn" data-act="copyStack" title="Copy stack trace">Stack</button>` : ""}
+          <button class="wd-act-btn ${e.pinned ? "pin-active" : ""}" data-act="pin" title="${e.pinned ? "Unstar log" : "Star log"}">${e.pinned ? "★" : "☆"}</button>
+          ${e.source ? `<button class="wd-act-btn" data-act="block" title="Block logs from this source">🚫</button>` : ""}
+          <button class="wd-act-btn delete-btn" data-act="delete" title="Cancel/Remove this log">✕</button>
         </div>
       </div>
     `;
   }).join("");
+
   listEl.innerHTML = html;
 
   const blChip = $("#blacklistChip");
@@ -192,26 +265,42 @@ function render() {
   }
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
 function toast(msg) {
   const el = document.createElement("div");
+  el.className = "wd-toast";
   el.textContent = msg;
-  el.style.cssText = "position:fixed;bottom:12px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:6px 12px;border-radius:6px;z-index:100;font-size:12px;";
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 1500);
+  setTimeout(() => el.remove(), 1600);
 }
 
 async function copyText(t) {
+  let copied = false;
   try {
-    await navigator.clipboard.writeText(t);
-    toast("Copied");
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = t; document.body.appendChild(ta); ta.select();
-    document.execCommand("copy"); ta.remove(); toast("Copied");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(t);
+      copied = true;
+    }
+  } catch (_) {}
+
+  if (!copied) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      ta.style.left = "-9999px";
+      (document.body || document.documentElement).appendChild(ta);
+      ta.focus();
+      ta.select();
+      copied = document.execCommand("copy");
+      ta.remove();
+    } catch (_) {}
+  }
+
+  if (copied) {
+    toast("Copied to clipboard");
+  } else {
+    toast("Failed to copy");
   }
 }
 
@@ -233,17 +322,27 @@ function exportAs(fmt) {
   } else if (fmt === "csv") {
     const rows = [["timestamp", "severity", "message", "source", "stack"]];
     for (const e of visible) {
-      rows.push([new Date(e.timestamp).toISOString(), e.severity, e.message, e.source || "", ((e.stack && e.stack.length ? e.stack : e.callStack) || []).join(" | ")]);
+      rows.push([
+        new Date(e.timestamp).toISOString(),
+        e.severity,
+        e.message,
+        e.source || "",
+        ((e.stack && e.stack.length ? e.stack : e.callStack) || []).join(" | "),
+      ]);
     }
     const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     download(`webdebug-${stamp}.csv`, csv, "text/csv");
   } else if (fmt === "bugreport") {
-    chrome.runtime.sendMessage({type: "wd:capture", tabId: state.tabId}, (res) => {
-      const img = res && res.dataUrl ? `<img src="${res.dataUrl}" style="max-width:100%; border:1px solid #ccc; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px;"/>` : "<p><i>Screenshot not available</i></p>";
+    chrome.runtime.sendMessage({ type: "wd:capture", tabId: state.tabId }, (res) => {
+      const img = res && res.dataUrl
+        ? `<img src="${res.dataUrl}" style="max-width:100%; border:1px solid #ccc; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px;"/>`
+        : "<p><i>Screenshot not available</i></p>";
       const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Bug Report - ${stamp}</title>
-<style>body{font-family:-apple-system, sans-serif; max-width:1000px; margin:20px auto; padding:0 20px;} pre{background:#f1f5f9; padding:15px; border-radius:6px; overflow:auto; font-size:12px;}</style>
+<style>body{font-family:-apple-system, sans-serif; max-width:1000px; margin:20px auto; padding:0 20px; background:#f8fafc; color:#0f172a;} pre{background:#ffffff; border:1px solid #e2e8f0; padding:15px; border-radius:6px; overflow:auto; font-size:12px;}</style>
 </head><body>
+<h1>WebDebug Pro - Bug Report</h1>
+<p>Generated at: ${new Date().toLocaleString()}</p>
 <h2>Screenshot</h2>
 ${img}
 <h2>Console Logs (${visible.length})</h2>
@@ -255,33 +354,100 @@ ${img}
 }
 
 function bindUI() {
-  $("#search").addEventListener("input", (e) => { state.search = e.target.value; render(); });
-  document.querySelectorAll("[data-filter]").forEach((cb) => {
-    cb.addEventListener("change", () => { state.filters[cb.dataset.filter] = cb.checked; render(); });
+  const searchEl = $("#search");
+  const searchClear = $("#searchClear");
+  if (searchEl) {
+    searchEl.addEventListener("input", (e) => {
+      state.search = e.target.value;
+      if (searchClear) searchClear.style.display = state.search ? "block" : "none";
+      render();
+    });
+  }
+  if (searchClear) {
+    searchClear.addEventListener("click", () => {
+      if (searchEl) searchEl.value = "";
+      state.search = "";
+      searchClear.style.display = "none";
+      render();
+    });
+  }
+
+  // Filter chips
+  document.querySelectorAll(".wd-chip[data-filter]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const f = chip.dataset.filter;
+      if (f === "all") {
+        const allOn = Object.values(state.filters).every(Boolean);
+        Object.keys(state.filters).forEach((k) => (state.filters[k] = !allOn));
+        document.querySelectorAll(".wd-chip[data-filter]").forEach((c) => {
+          if (!allOn) c.classList.add("active");
+          else c.classList.remove("active");
+        });
+      } else {
+        state.filters[f] = !state.filters[f];
+        chip.classList.toggle("active", state.filters[f]);
+      }
+      render();
+    });
   });
-  $("#group").addEventListener("change", (e) => { state.group = e.target.checked; render(); });
-  $("#persist")?.addEventListener("change", (e) => {
-    state.persist = e.target.checked;
-    chrome.runtime.sendMessage({ type: "wd:setSettings", tabId: state.tabId, settings: { persist: state.persist } });
-  });
-  $("#pause")?.addEventListener("change", (e) => {
-    state.pause = e.target.checked;
-    if (!state.pause) render();
-  });
+
+  const btnGroup = $("#group");
+  if (btnGroup) {
+    btnGroup.addEventListener("click", () => {
+      state.group = !state.group;
+      btnGroup.classList.toggle("active", state.group);
+      render();
+    });
+  }
+
+  const btnPersist = $("#persist");
+  if (btnPersist) {
+    btnPersist.addEventListener("click", () => {
+      state.persist = !state.persist;
+      btnPersist.classList.toggle("active", state.persist);
+      chrome.runtime.sendMessage({
+        type: "wd:setSettings",
+        tabId: state.tabId,
+        settings: { persist: state.persist },
+      });
+    });
+  }
+
+  const btnPause = $("#pause");
+  if (btnPause) {
+    btnPause.addEventListener("click", () => {
+      state.pause = !state.pause;
+      btnPause.classList.toggle("active", state.pause);
+      if (!state.pause) render();
+    });
+  }
+
   $("#clear")?.addEventListener("click", () => {
     chrome.runtime.sendMessage({ type: "wd:clear", tabId: state.tabId }, () => {});
+    state.entries = state.entries.filter((e) => e.pinned);
+    render();
   });
-  $("#copyAll").addEventListener("click", () => {
+
+  $("#copyAll")?.addEventListener("click", () => {
     copyText(computeVisible().map(entryToText).join("\n\n"));
   });
-  const exp = document.querySelector(".export");
-  $("#exportBtn").addEventListener("click", (e) => { e.stopPropagation(); exp.classList.toggle("open"); });
-  document.addEventListener("click", () => exp.classList.remove("open"));
-  $("#exportMenu").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-fmt]");
-    if (b) { exportAs(b.dataset.fmt); exp.classList.remove("open"); }
+
+  const exp = document.querySelector(".wd-export");
+  $("#exportBtn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    exp?.classList.toggle("open");
   });
-  $("#theme").addEventListener("click", () => {
+  document.addEventListener("click", () => exp?.classList.remove("open"));
+
+  $("#exportMenu")?.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-fmt]");
+    if (b) {
+      exportAs(b.dataset.fmt);
+      exp?.classList.remove("open");
+    }
+  });
+
+  $("#theme")?.addEventListener("click", () => {
     state.theme = state.theme === "light" ? "dark" : "light";
     document.body.className = "theme-" + state.theme;
     chrome.storage.local.set({ theme: state.theme });
@@ -292,134 +458,130 @@ function bindUI() {
     render();
   });
 
-  $("#btnInspect")?.addEventListener("click", () => {
-    chrome.scripting.executeScript({
-      target: { tabId: state.tabId },
-      world: "MAIN",
-      func: () => {
-        if (window.__WD_INSPECTING) return;
-        window.__WD_INSPECTING = true;
-        
-        let overlay = document.createElement("div");
-        Object.assign(overlay.style, {
-          position: "fixed", pointerEvents: "none", zIndex: "2147483647",
-          border: "2px solid #2563eb", background: "rgba(37,99,235,0.2)",
-          transition: "all 0.1s ease", display: "none"
-        });
-        document.body.appendChild(overlay);
+  // DOM Inspect Mode
+  const btnInspect = $("#btnInspect");
+  if (btnInspect) {
+    btnInspect.addEventListener("click", () => {
+      chrome.scripting.executeScript({
+        target: { tabId: state.tabId },
+        world: "MAIN",
+        func: () => {
+          if (window.__WD_INSPECTING) return;
+          window.__WD_INSPECTING = true;
 
-        function onMove(e) {
-          const el = e.target;
-          if (el === overlay) return;
-          const r = el.getBoundingClientRect();
+          const overlay = document.createElement("div");
           Object.assign(overlay.style, {
-            display: "block", left: r.left + "px", top: r.top + "px",
-            width: r.width + "px", height: r.height + "px"
+            position: "fixed",
+            pointerEvents: "none",
+            zIndex: "2147483647",
+            border: "2px solid #38bdf8",
+            background: "rgba(56, 189, 248, 0.2)",
+            borderRadius: "3px",
+            transition: "all 0.08s ease",
+            display: "none",
           });
-        }
-        function onClick(e) {
-          e.preventDefault();
-          e.stopPropagation();
-          cleanup();
-          
-          const el = e.target;
-          let attrs = {};
-          for (let i = 0; i < el.attributes.length; i++) {
-             attrs[el.attributes[i].name] = el.attributes[i].value;
-          }
-          const info = {
-             tagName: el.tagName.toLowerCase(),
-             id: el.id,
-             className: el.className,
-             attributes: attrs,
-             innerHTML: el.innerHTML.substring(0, 200) + (el.innerHTML.length > 200 ? "..." : "")
-          };
-          console.log("Inspected Element:", info);
-        }
-        function cleanup() {
-          window.__WD_INSPECTING = false;
-          if (overlay.parentNode) overlay.remove();
-          document.removeEventListener("mousemove", onMove, true);
-          document.removeEventListener("click", onClick, true);
-        }
-        document.addEventListener("mousemove", onMove, true);
-        document.addEventListener("click", onClick, true);
-      }
-    }).then(() => toast("Hover and click an element")).catch(e => toast("Error starting inspect mode"));
-  });
+          document.body.appendChild(overlay);
 
+          function onMove(e) {
+            const el = e.target;
+            if (el === overlay) return;
+            const r = el.getBoundingClientRect();
+            Object.assign(overlay.style, {
+              display: "block",
+              left: r.left + "px",
+              top: r.top + "px",
+              width: r.width + "px",
+              height: r.height + "px",
+            });
+          }
+          function onClick(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            cleanup();
+
+            const el = e.target;
+            const attrs = {};
+            for (let i = 0; i < el.attributes.length; i++) {
+              attrs[el.attributes[i].name] = el.attributes[i].value;
+            }
+            const info = {
+              tagName: el.tagName.toLowerCase(),
+              id: el.id,
+              className: el.className,
+              attributes: attrs,
+              innerHTML: el.innerHTML.substring(0, 200) + (el.innerHTML.length > 200 ? "..." : ""),
+            };
+            console.log("Inspected Element:", info);
+          }
+          function cleanup() {
+            window.__WD_INSPECTING = false;
+            if (overlay.parentNode) overlay.remove();
+            document.removeEventListener("mousemove", onMove, true);
+            document.removeEventListener("click", onClick, true);
+          }
+          document.addEventListener("mousemove", onMove, true);
+          document.addEventListener("click", onClick, true);
+        },
+      }).then(() => toast("Hover & click an element on the page")).catch(() => toast("Error starting inspect mode"));
+    });
+  }
+
+  // Console REPL
   const jsInput = $("#jsInput");
   if (jsInput) {
     jsInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && e.target.value.trim()) {
-        const code = e.target.value.trim();
-        e.target.value = "";
-        
+      if (e.key === "ArrowUp") {
+        if (state.history.length > 0) {
+          if (state.historyIndex === -1) state.historyIndex = state.history.length - 1;
+          else state.historyIndex = Math.max(0, state.historyIndex - 1);
+          jsInput.value = state.history[state.historyIndex] || "";
+        }
+        e.preventDefault();
+      } else if (e.key === "ArrowDown") {
+        if (state.historyIndex !== -1) {
+          state.historyIndex = Math.min(state.history.length, state.historyIndex + 1);
+          jsInput.value = state.history[state.historyIndex] || "";
+        }
+        e.preventDefault();
+      } else if (e.key === "Enter" && jsInput.value.trim()) {
+        const code = jsInput.value.trim();
+        jsInput.value = "";
+        state.history.push(code);
+        state.historyIndex = -1;
+
         state.entries.push({
           id: Date.now() + Math.random(),
           timestamp: Date.now(),
           severity: "info",
           message: "> " + code,
           args: [],
-          source: ""
+          source: "console",
         });
         render();
 
-        if (chrome.devtools && chrome.devtools.inspectedWindow) {
-          chrome.devtools.inspectedWindow.eval(code, (res, err) => {
-            if (err || typeof res !== "undefined") {
-              const entry = {
-                id: Date.now() + Math.random(),
-                timestamp: Date.now(),
-                severity: err ? "error" : "log",
-                message: err ? (err.value || err.description || "Error") : "",
-                args: err ? [] : [res],
-                source: "console"
-              };
-              if (!err && typeof res !== 'object') entry.message = String(res);
-              state.entries.push(entry);
-              render();
-            }
-          });
-        } else {
-          chrome.scripting.executeScript({
-            target: { tabId: state.tabId },
-            world: "MAIN",
-            func: (c) => {
-              try { return { res: window.eval(c) }; }
-              catch(err) { return { err: { name: err.name, message: err.message, stack: err.stack } }; }
-            },
-            args: [code]
-          }).then(results => {
-            const frame = results[0];
-            if (frame && frame.result) {
-              const {res, err} = frame.result;
-              if (err || typeof res !== "undefined") {
-                const entry = {
-                  id: Date.now() + Math.random(),
-                  timestamp: Date.now(),
-                  severity: err ? "error" : "log",
-                  message: err ? err.message : "",
-                  args: err ? [{__type:"Error", ...err}] : [res],
-                  source: "console",
-                };
-                if (!err && typeof res !== 'object') entry.message = String(res);
-                state.entries.push(entry);
-                render();
-              }
-            }
-          }).catch(e => toast("Error: " + e.message));
-        }
+        chrome.runtime.sendMessage({ type: "wd:eval", tabId: state.tabId, code }, (res) => {
+          if (!res) return;
+          const entry = {
+            id: Date.now() + Math.random(),
+            timestamp: Date.now(),
+            severity: res.err ? "error" : "log",
+            message: res.err ? (res.err.message || res.err.name || "Error") : (typeof res.res === "object" ? "" : String(res.res)),
+            args: res.err ? [{ __type: "Error", ...res.err }] : [res.res],
+            source: "console",
+          };
+          state.entries.push(entry);
+          render();
+        });
       }
     });
   }
 
-  // Storage Manager Tabs
+  // Tabs: Logs vs Storage
   const tabLogs = $("#tabLogs");
   const tabStorage = $("#tabStorage");
   const viewLogs = $("#viewLogs");
   const viewStorage = $("#viewStorage");
-  
+
   if (tabLogs && tabStorage) {
     tabLogs.addEventListener("click", () => {
       tabLogs.classList.add("active");
@@ -437,63 +599,35 @@ function bindUI() {
   }
 
   function refreshStorage() {
-    chrome.scripting.executeScript({
-      target: { tabId: state.tabId },
-      world: "MAIN",
-      func: () => {
-        const ls = { ...localStorage };
-        const ss = { ...sessionStorage };
-        const cookies = document.cookie;
-        return { ls, ss, cookies };
+    chrome.runtime.sendMessage({ type: "wd:getStorage", tabId: state.tabId }, (res) => {
+      if (!res) return;
+      $("#outLocal").innerHTML = `<div class="json-tree">${renderJsonTree(res.ls || {}, true)}</div>`;
+      $("#outSession").innerHTML = `<div class="json-tree">${renderJsonTree(res.ss || {}, true)}</div>`;
+      const cobj = {};
+      if (res.cookies) {
+        res.cookies.split(";").forEach((c) => {
+          const parts = c.split("=");
+          if (parts[0]) cobj[parts[0].trim()] = decodeURIComponent(parts.slice(1).join("=") || "");
+        });
       }
-    }).then(results => {
-      if (results && results[0] && results[0].result) {
-        const data = results[0].result;
-        $("#outLocal").innerHTML = `<div class="json-tree">${renderJsonTree(data.ls, true)}</div>`;
-        $("#outSession").innerHTML = `<div class="json-tree">${renderJsonTree(data.ss, true)}</div>`;
-        let cobj = {};
-        if (data.cookies) {
-          data.cookies.split(';').forEach(c => {
-             const parts = c.split('=');
-             if(parts[0]) cobj[parts[0].trim()] = decodeURIComponent(parts.slice(1).join('=') || '');
-          });
-        }
-        $("#outCookies").innerHTML = `<div class="json-tree">${renderJsonTree(cobj, true)}</div>`;
-      }
-    }).catch(e => toast("Error fetching storage"));
+      $("#outCookies").innerHTML = `<div class="json-tree">${renderJsonTree(cobj, true)}</div>`;
+    });
   }
 
   function clearStorage(type) {
-    chrome.scripting.executeScript({
-      target: { tabId: state.tabId },
-      world: "MAIN",
-      func: (t) => {
-        if (t === 'ls') localStorage.clear();
-        if (t === 'ss') sessionStorage.clear();
-        if (t === 'cookies') {
-           const cookies = document.cookie.split(";");
-           for (let i = 0; i < cookies.length; i++) {
-              const cookie = cookies[i];
-              const eqPos = cookie.indexOf("=");
-              const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
-              document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
-           }
-        }
-      },
-      args: [type]
-    }).then(() => {
-      toast("Cleared");
+    chrome.runtime.sendMessage({ type: "wd:clearStorage", tabId: state.tabId, storageType: type }, () => {
+      toast("Storage cleared");
       refreshStorage();
-    }).catch(e => toast("Error clearing storage"));
+    });
   }
 
-  const btnRL = $("#btnRefreshLocal"); if(btnRL) btnRL.addEventListener("click", refreshStorage);
-  const btnRS = $("#btnRefreshSession"); if(btnRS) btnRS.addEventListener("click", refreshStorage);
-  const btnRC = $("#btnRefreshCookies"); if(btnRC) btnRC.addEventListener("click", refreshStorage);
-  
-  const btnCL = $("#btnClearLocal"); if(btnCL) btnCL.addEventListener("click", () => clearStorage('ls'));
-  const btnCS = $("#btnClearSession"); if(btnCS) btnCS.addEventListener("click", () => clearStorage('ss'));
-  const btnCC = $("#btnClearCookies"); if(btnCC) btnCC.addEventListener("click", () => clearStorage('cookies'));
+  $("#btnRefreshLocal")?.addEventListener("click", refreshStorage);
+  $("#btnRefreshSession")?.addEventListener("click", refreshStorage);
+  $("#btnRefreshCookies")?.addEventListener("click", refreshStorage);
+
+  $("#btnClearLocal")?.addEventListener("click", () => clearStorage("ls"));
+  $("#btnClearSession")?.addEventListener("click", () => clearStorage("ss"));
+  $("#btnClearCookies")?.addEventListener("click", () => clearStorage("cookies"));
 
   listEl.addEventListener("click", (e) => {
     if (e.target.classList.contains("json-toggle")) {
@@ -501,35 +635,48 @@ function bindUI() {
       if (parent) parent.classList.toggle("json-collapsed");
       return;
     }
-    const entryEl = e.target.closest(".entry");
-    if (!entryEl) return;
-    const id = parseInt(entryEl.dataset.id, 10);
-    const entry = state.entries.find((x) => x.id === id) ||
-      computeVisible().find((x) => x.id === id);
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
+    e.stopPropagation();
+
+    const entryEl = btn.closest(".wd-entry");
+    if (!entryEl) return;
+    const id = String(entryEl.dataset.id);
+    const entry = state.entries.find((x) => String(x.id) === id) || computeVisible().find((x) => String(x.id) === id);
+    if (!entry) return;
+
     const act = btn.dataset.act;
     if (act === "copy") {
       copyText(entryToText(entry));
     } else if (act === "copyStack") {
       const frames = (entry.stack && entry.stack.length ? entry.stack : entry.callStack) || [];
-      if (!frames.length) { toast("No stack trace"); return; }
+      if (!frames.length) { toast("No stack trace available"); return; }
       copyText(frames.join("\n"));
     } else if (act === "pin") {
-      const target = state.entries.find((x) => x.id === id);
-      if (target) {
-        target.pinned = !target.pinned;
-        chrome.runtime.sendMessage({ type: "wd:setPinned", tabId: state.tabId, id, pinned: target.pinned });
-        render();
-      }
-    } else if (act === "expand") {
-      if (state.expanded.has(id)) state.expanded.delete(id);
-      else state.expanded.add(id);
+      entry.pinned = !entry.pinned;
+      chrome.runtime.sendMessage({ type: "wd:setPinned", tabId: state.tabId, id: entry.id, pinned: entry.pinned });
+      toast(entry.pinned ? "Log starred (pinned)" : "Log unstarred");
       render();
+    } else if (act === "expand") {
+      const idStr = String(entry.id);
+      if (state.expanded.has(idStr)) state.expanded.delete(idStr);
+      else state.expanded.add(idStr);
+      render();
+    } else if (act === "delete" || act === "cancel") {
+      const idStr = String(entry.id);
+      state.expanded.delete(idStr);
+      const idx = state.entries.findIndex((x) => String(x.id) === idStr);
+      if (idx !== -1) {
+        state.entries.splice(idx, 1);
+        chrome.runtime.sendMessage({ type: "wd:deleteEntry", tabId: state.tabId, id: entry.id });
+        toast("Log removed");
+        scheduleRender();
+      }
     } else if (act === "block") {
       if (entry.source) {
         state.blacklist.add(entry.source);
-        render();
+        toast(`Blocked logs from ${entry.source}`);
+        scheduleRender();
       }
     }
   });
@@ -537,11 +684,14 @@ function bindUI() {
 
 async function init() {
   const { theme } = await chrome.storage.local.get("theme");
-  if (theme) { state.theme = theme; document.body.className = "theme-" + theme; }
+  if (theme) {
+    state.theme = theme;
+    document.body.className = "theme-" + theme;
+  }
 
   state.tabId = await getTabId();
   if (state.tabId == null) {
-    listEl.innerHTML = `<div class="empty">Could not detect an active tab.</div>`;
+    listEl.innerHTML = `<div class="wd-empty"><div class="wd-empty-icon">⚠️</div><div>Could not detect an active tab.</div></div>`;
     return;
   }
   tabInfoEl.textContent = `tab #${state.tabId}`;
@@ -549,50 +699,79 @@ async function init() {
   bindUI();
 
   chrome.runtime.sendMessage({ type: "wd:getState", tabId: state.tabId }, (res) => {
-    if (!res) return;
-    state.entries = res.entries || [];
+    if (!res || !res.entries) return;
+    const idSet = new Set(state.entries.map((e) => e.id));
+    for (const entry of res.entries) {
+      if (!idSet.has(entry.id)) {
+        state.entries.push(entry);
+        idSet.add(entry.id);
+      }
+    }
+    state.entries.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     state.persist = !!(res.settings && res.settings.persist);
-    $("#persist").checked = state.persist;
-    render();
+    const btnP = $("#persist");
+    if (btnP) btnP.classList.toggle("active", state.persist);
+    scheduleRender();
   });
 
   const port = chrome.runtime.connect({ name: "wd-panel:" + state.tabId });
   port.onMessage.addListener((msg) => {
-    if (msg.type === "wd:new") {
-      state.entries.push(msg.entry);
-      if (!state.pause) render();
+    if (msg.type === "wd:new" && msg.entry) {
+      if (!state.entries.some((e) => String(e.id) === String(msg.entry.id))) {
+        state.entries.push(msg.entry);
+        if (state.entries.length > 1000) state.entries.shift();
+        if (!state.pause) scheduleRender();
+        else updateBadgeCounters();
+      }
     } else if (msg.type === "wd:reset") {
       state.entries = msg.entries || [];
-      if (!state.pause) render();
+      if (!state.pause) scheduleRender();
+      else updateBadgeCounters();
+    } else if (msg.type === "wd:entryDeleted") {
+      state.entries = state.entries.filter((e) => String(e.id) !== String(msg.id));
+      if (!state.pause) scheduleRender();
+      else updateBadgeCounters();
+    } else if (msg.type === "wd:entryPinned") {
+      const target = state.entries.find((e) => String(e.id) === String(msg.id));
+      if (target) {
+        target.pinned = !!msg.pinned;
+        if (!state.pause) scheduleRender();
+      }
     }
   });
 
+  port.onDisconnect.addListener(() => {
+    const _ignored = chrome.runtime.lastError;
+  });
+
+  // Performance metrics polling
   setInterval(() => {
     if (!state.tabId) return;
     chrome.scripting.executeScript({
       target: { tabId: state.tabId },
       world: "MAIN",
       func: () => {
-        let text = "";
+        let mem = "";
+        let load = "";
         try {
-           const p = performance.memory;
-           if (p && p.usedJSHeapSize) text += `Mem: ${(p.usedJSHeapSize / 1048576).toFixed(1)}MB`;
-        } catch(e){}
+          const p = performance.memory;
+          if (p && p.usedJSHeapSize) mem = (p.usedJSHeapSize / 1048576).toFixed(1);
+        } catch (_) {}
         try {
-           const t = performance.timing;
-           if (t && t.loadEventEnd > 0) {
-              const loadTime = t.loadEventEnd - t.navigationStart;
-              text += (text ? " | " : "") + `Load: ${loadTime}ms`;
-           }
-        } catch(e){}
-        return text;
+          const t = performance.timing;
+          if (t && t.loadEventEnd > 0) load = String(t.loadEventEnd - t.navigationStart);
+        } catch (_) {}
+        return { mem, load };
+      },
+    }).then((r) => {
+      const data = r && r[0] && r[0].result;
+      if (data) {
+        const perfEl = document.getElementById("perfWidget");
+        if (perfEl && data.mem) perfEl.textContent = `Mem: ${data.mem}MB`;
+        const loadEl = document.getElementById("loadWidget");
+        if (loadEl && data.load) loadEl.textContent = `Load: ${data.load}ms`;
       }
-    }).then(r => {
-       if (r && r[0] && typeof r[0].result === "string") {
-          const perfEl = document.getElementById("perfWidget");
-          if (perfEl) perfEl.textContent = r[0].result;
-       }
-    }).catch(e=>{});
+    }).catch(() => {});
   }, 2000);
 }
 

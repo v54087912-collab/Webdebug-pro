@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "WebDebug Pro",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "description": "Mini DevTools panel: capture console logs, errors, unhandled rejections, and failed network requests from any tab with copy/export utilities.",
-  "minimum_chrome_version": "102",
+  "minimum_chrome_version": "111",
   "permissions": [
     "activeTab",
     "scripting",
@@ -17,12 +17,19 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "panel.html",
-    "default_title": "WebDebug Pro",
+    "default_title": "Toggle WebDebug Pro",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
+    }
+  },
+  "commands": {
+    "toggle-debug-panel": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Toggle WebDebug Pro floating panel"
     }
   },
   "icons": {
@@ -34,7 +41,14 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content-script.js"],
+      "js": ["injected.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["overlay.js", "content-script.js"],
       "run_at": "document_start",
       "all_frames": false,
       "world": "ISOLATED"
@@ -42,7 +56,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["injected.js"],
+      "resources": ["injected.js", "overlay.js", "icons/*", "panel.html", "panel.css", "panel.js"],
       "matches": ["<all_urls>"]
     }
   ]
